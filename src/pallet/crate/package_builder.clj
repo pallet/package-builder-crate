@@ -8,14 +8,15 @@
   (:require
    [pallet.parameter :as parameter]
    [pallet.action.directory :as directory]
-   [pallet.action.exec-script :as exec-script]
    [pallet.action.file :as file]
    [pallet.action.package :as package]
    [pallet.action.package.epel :as epel]
    [pallet.action.remote-file :as remote-file]
    [pallet.action.user :as user]
    [pallet.stevedore :as stevedore]
-   [clojure.string :as string]))
+   [clojure.string :as string])
+  (:use
+   [pallet.action.exec-script :only [exec-checked-script]]))
 
 
 ;;; http://fedoraproject.org/wiki/PackageMaintainers/CreatingPackageHowTo
@@ -136,7 +137,7 @@
   "Initialise a mock environment for a target architecture."
   [session & {:keys [target] :or {target "default"}}]
   (let [user (parameter/get-for-target session [:package-builder :build-user])]
-    (exec-script/exec-checked-script    ; set up the mock chroot
+    (exec-checked-script    ; set up the mock chroot
      session
      "init mock chroot"
      (sudo -u ~user "/usr/bin/mock" -r ~target init))))
@@ -145,7 +146,7 @@
   "Build a rpm source package."
   [session path]
   (let [user (parameter/get-for-target session [:package-builder :build-user])]
-    (exec-script/exec-checked-script session
+    (exec-checked-script session
      (format "rpmbuild source package %s" path)
      (cd @(dirname ~path))
      (rpmbuild -bs --nodeps @(basename ~path)))))
@@ -156,7 +157,7 @@
   (let [user (parameter/get-for-target session [:package-builder :build-user])]
     (->
      session
-     (exec-script/exec-checked-script
+     (exec-checked-script
       (format "rpm rebuild %s" src-rpm)
       (sudo -u ~user "/usr/bin/mock"
             -r ~target
@@ -168,3 +169,43 @@
   "Trivial helper for specfiles."
   [& lines]
   (string/join "\n" lines))
+
+
+
+;;; Debian package support
+(defn deb-package-setup
+  "Setup an environment for building deb packages."
+  [session]
+  (->
+   session
+   (package/package-manager :update)
+   (package/package "dpkg-dev")))
+
+(defn deb-build
+  "Build a debian package"
+  [session & {:keys [dir source-only arch-independent arch-dependent
+                     binary-only]}]
+  (let [flag (or (first (remove nil? [(when source-only "-S")
+                                      (when arch-independent "-A")
+                                      (when arch-dependent "-B")
+                                      (when binary-only "-b")]))
+                 "")]
+    (exec-checked-script
+     session
+     (str "dpkg-buildpackage " dir)
+     (cd ~dir)
+     (if (file-exists? "debian/control")
+       (do
+         (apt-get -q -y install
+                  @(pipe
+                    (grep Build-Depends "debian/control")
+                    (sed
+                     -e "'s/([^)]*)//g'"          ;; remove version specs
+                     -e "'s/\\[[^]]*\\]//g'"      ;; remove architectures
+                     -e "'s/Build-Depends.*://g'" ;; remove prefix
+                     -e "'s/,//g'")))             ;; remove commas
+         (dpkg-buildpackage ~flag))
+       (do
+         (println "Invalid debian package directory - no `control` file")
+         1))
+     (cd -))))
