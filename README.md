@@ -12,4 +12,4 @@ This a crate to install and run package-builder via [Pallet](http://pallet.githu
 
 Licensed under [EPL](http://www.eclipse.org/legal/epl-v10.html)
 
-Copyright 2010, 2011 Hugo Duncan.
+Copyright 2010, 2011, 2012 Hugo Duncan.
